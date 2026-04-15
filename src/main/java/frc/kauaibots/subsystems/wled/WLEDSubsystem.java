@@ -3,6 +3,7 @@ package frc.kauaibots.subsystems.wled;
 import java.net.DatagramSocket;
 import java.net.SocketException;
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Notifier;
@@ -11,10 +12,11 @@ import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 public class WLEDSubsystem extends SubsystemBase {
-    private static final double PLAYBACK_PERIOD_SECONDS = 0.02;
+    private static final double NOTIFIER_INTERVAL_SECONDS = 0.02;
 
     private final DatagramSocket socket;
     private final Notifier playbackNotifier;
+    private final AtomicBoolean playbackNotifierStarted;
     private final Animator marqueeAnimator;
     private final Animator horizontalStripAnimator;
     private final Animator imageAnimator;
@@ -43,6 +45,7 @@ public class WLEDSubsystem extends SubsystemBase {
         gifAnimator = new GifAnimator(config);
         socket = createSocket();
         playbackNotifier = createPlaybackNotifier();
+        playbackNotifierStarted = new AtomicBoolean(false);
         activePlayback = null;
     }
 
@@ -76,6 +79,7 @@ public class WLEDSubsystem extends SubsystemBase {
             return;
         }
 
+        ensurePlaybackNotifierStarted();
         activePlayback = new PlaybackState(animationUDPs);
     }
 
@@ -91,19 +95,28 @@ public class WLEDSubsystem extends SubsystemBase {
     private Notifier createPlaybackNotifier() {
         Notifier notifier = new Notifier(this::sendActiveFrame);
         notifier.setName("WLED Playback");
-        notifier.startPeriodic(PLAYBACK_PERIOD_SECONDS);
         return notifier;
+    }
+
+    private void ensurePlaybackNotifierStarted() {
+        if (playbackNotifierStarted.compareAndSet(false, true)) {
+            playbackNotifier.startPeriodic(NOTIFIER_INTERVAL_SECONDS);
+        }
     }
 
     private void sendActiveFrame() {
         PlaybackState playbackState = activePlayback;
-        if (socket == null || playbackState == null || playbackState.animation.isEmpty()) {
+        if (socket == null || playbackState == null) {
+            return;
+        }
+        AnimationUDPs animation = playbackState.animation;
+        if (animation.isEmpty()) {
             return;
         }
 
         try {
             if (playbackState.currentFrameIndex != playbackState.lastSentFrameIndex) {
-                playbackState.animation.sendFrame(socket, playbackState.currentFrameIndex);
+                animation.sendFrame(socket, playbackState.currentFrameIndex);
                 playbackState.lastSentFrameIndex = playbackState.currentFrameIndex;
             }
         } catch (IOException e) {
@@ -111,13 +124,12 @@ public class WLEDSubsystem extends SubsystemBase {
             return;
         }
 
-        double frameDurationSeconds =
-                playbackState.animation.getFrameDisplayDurationSeconds(playbackState.currentFrameIndex);
+        double frameDurationSeconds = animation.getFrameDisplayDurationSeconds(playbackState.currentFrameIndex);
         double nowSeconds = Timer.getFPGATimestamp();
         if (frameDurationSeconds <= 0.0
                 || nowSeconds - playbackState.frameStartTimeSeconds >= frameDurationSeconds) {
             playbackState.currentFrameIndex++;
-            if (playbackState.currentFrameIndex >= playbackState.animation.getFrameCount()) {
+            if (playbackState.currentFrameIndex >= animation.getFrameCount()) {
                 playbackState.currentFrameIndex = 0;
             }
             playbackState.frameStartTimeSeconds = nowSeconds;
