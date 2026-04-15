@@ -32,42 +32,42 @@ class WLEDSubsystemPlaybackRegressionTest {
     Path tempDir;
 
     @Test
-    void prepareImageMatchesSnapshot() throws IOException {
-        WLEDSubsystem subsystem = new WLEDSubsystem(TEST_CONFIG);
+    void displayBitmapMatchesSnapshot() throws IOException {
+        ImageAnimator imageAnimator = new ImageAnimator(TEST_CONFIG);
 
         assertPlaybackMatchesSnapshot(
                 "wled-prepare-image.snapshot.txt",
-                subsystem.prepareImage(writeImage("image.png", createImageFixture()).toString()));
+                imageAnimator.animate(writeImage("image.png", createImageFixture()).toString()));
     }
 
     @Test
-    void prepareMarqueeMatchesSnapshot() throws IOException {
-        WLEDSubsystem subsystem = new WLEDSubsystem(TEST_CONFIG);
+    void animateBitmapAsMarqueeMatchesSnapshot() throws IOException {
+        MarqueeAnimator marqueeAnimator = new MarqueeAnimator(TEST_CONFIG);
 
         assertPlaybackMatchesSnapshot(
                 "wled-prepare-marquee.snapshot.txt",
-                subsystem.prepareMarquee(writeImage("marquee.png", createMarqueeFixture()).toString()));
+                marqueeAnimator.animate(writeImage("marquee.png", createMarqueeFixture()).toString()));
     }
 
     @Test
-    void prepareHorizontalAnimationStripMatchesSnapshot() throws IOException {
-        WLEDSubsystem subsystem = new WLEDSubsystem(TEST_CONFIG);
+    void animateFromBitmapAnimationStripMatchesSnapshot() throws IOException {
+        HorizontalStripAnimator horizontalStripAnimator = new HorizontalStripAnimator(TEST_CONFIG);
 
         assertPlaybackMatchesSnapshot(
                 "wled-prepare-strip.snapshot.txt",
-                subsystem.prepareHorizontalAnimationStrip(writeImage("strip.png", createStripFixture()).toString()));
+                horizontalStripAnimator.animate(writeImage("strip.png", createStripFixture()).toString()));
     }
 
     @Test
-    void prepareGifMatchesSnapshot() throws IOException {
-        WLEDSubsystem subsystem = new WLEDSubsystem(TEST_CONFIG);
+    void animateGifMatchesSnapshot() throws IOException {
+        GifAnimator gifAnimator = new GifAnimator(TEST_CONFIG);
 
         assertPlaybackMatchesSnapshot(
                 "wled-prepare-gif.snapshot.txt",
-                subsystem.prepareGIF(writeGif("fixture.gif", createGifFrames(), new int[] {5, 9}).toString()));
+                gifAnimator.animate(writeGif("fixture.gif", createGifFrames(), new int[] {5, 9}).toString()));
     }
 
-    private void assertPlaybackMatchesSnapshot(String resourceName, WLEDSubsystem.PreparedPlaybackPackets playback)
+    private void assertPlaybackMatchesSnapshot(String resourceName, AnimationUDPs playback)
             throws IOException {
         assertEquals(loadSnapshot(resourceName), snapshot(playback));
     }
@@ -179,7 +179,7 @@ class WLEDSubsystemPlaybackRegressionTest {
         }
     }
 
-    private static String snapshot(WLEDSubsystem.PreparedPlaybackPackets playback) {
+    private static String snapshot(AnimationUDPs playback) {
         StringBuilder builder = new StringBuilder();
         builder.append("frameCount=").append(playback.getFrameCount()).append('\n');
         builder.append("packetsPerFrame=").append(playback.getPacketsPerFrame()).append('\n');
