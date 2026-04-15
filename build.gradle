@@ -17,6 +17,7 @@ repositories {
 dependencies {
     api wpi.java.deps.wpilib()
     api 'edu.wpi.first.wpilibNewCommands:wpilibNewCommands-java:2026.2.1'
+    implementation 'com.madgag:animated-gif-lib:1.4'
 
     nativeDebug wpi.java.deps.wpilibJniDebug(wpi.platforms.desktop)
     simulationDebug wpi.sim.enableDebug()

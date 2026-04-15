@@ -1,23 +1,19 @@
 package frc.kauaibots.subsystems.wled;
 
-import java.awt.AlphaComposite;
-import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.util.Arrays;
-import java.util.Iterator;
 
 import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.metadata.IIOMetadata;
-import javax.imageio.metadata.IIOMetadataNode;
-import javax.imageio.stream.ImageInputStream;
+
+import com.madgag.gif.fmsware.GifDecoder;
 
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
@@ -92,30 +88,6 @@ public class WLEDSubsystem extends SubsystemBase {
         }
     }
 
-    private static final class GifFrameMetadata {
-        private final int left;
-        private final int top;
-        private final int width;
-        private final int height;
-        private final String disposalMethod;
-        private final double displayDurationSeconds;
-
-        private GifFrameMetadata(
-                int left,
-                int top,
-                int width,
-                int height,
-                String disposalMethod,
-                double displayDurationSeconds) {
-            this.left = left;
-            this.top = top;
-            this.width = width;
-            this.height = height;
-            this.disposalMethod = disposalMethod;
-            this.displayDurationSeconds = displayDurationSeconds;
-        }
-    }
-
     private static final class FrameData {
         private final byte[][][] pixels;
         private final double displayDurationSeconds;
@@ -123,16 +95,6 @@ public class WLEDSubsystem extends SubsystemBase {
         private FrameData(byte[][][] pixels, double displayDurationSeconds) {
             this.pixels = pixels;
             this.displayDurationSeconds = displayDurationSeconds;
-        }
-    }
-
-    private static final class GifCompositeState {
-        private final BufferedImage canvas;
-        private GifFrameMetadata previousFrameMetadata;
-        private BufferedImage restoreToPreviousSnapshot;
-
-        private GifCompositeState(int width, int height) {
-            this.canvas = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         }
     }
 
@@ -226,32 +188,23 @@ public class WLEDSubsystem extends SubsystemBase {
 
     public PreparedPlaybackPackets prepareGIF(String path) {
         File gifFile = new File(path);
-        try (ImageInputStream imageInputStream = ImageIO.createImageInputStream(gifFile)) {
-            if (imageInputStream == null) {
+        try (InputStream inputStream = gifFile.toURI().toURL().openStream()) {
+            GifDecoder gifDecoder = new GifDecoder();
+            int status = gifDecoder.read(inputStream);
+            if (status == GifDecoder.STATUS_OPEN_ERROR) {
                 throw new BadImageFormatException("GIF file could not be opened.");
             }
-
-            Iterator<ImageReader> imageReaders = ImageIO.getImageReaders(imageInputStream);
-            if (!imageReaders.hasNext()) {
-                throw new BadImageFormatException("No GIF reader is available for this file.");
+            if (status != GifDecoder.STATUS_OK) {
+                throw new BadImageFormatException("GIF could not be decoded.");
             }
 
-            ImageReader imageReader = imageReaders.next();
-            try {
-                imageReader.setInput(imageInputStream, false, false);
-                validateGifCanvasDimensions(imageReader);
-                int frameCount = imageReader.getNumImages(true);
-                if (frameCount <= 0) {
-                    throw new BadImageFormatException("GIF contains no frames.");
-                }
-
-                GifCompositeState compositeState = new GifCompositeState(config.width(), config.height());
-                return buildPlaybackPackets(
-                        frameCount,
-                        frameIndex -> buildCompositedGifFrame(imageReader, frameIndex, compositeState));
-            } finally {
-                imageReader.dispose();
+            int frameCount = gifDecoder.getFrameCount();
+            if (frameCount <= 0) {
+                throw new BadImageFormatException("GIF contains no frames.");
             }
+
+            validateGifDimensions(gifDecoder.getFrame(0), "GIF logical screen");
+            return buildPlaybackPackets(frameCount, frameIndex -> buildGifFrame(gifDecoder, frameIndex));
         } catch (BadImageFormatException | IOException e) {
             return reportPreparationFailure("gif", path, e);
         }
@@ -364,135 +317,20 @@ public class WLEDSubsystem extends SubsystemBase {
         return image;
     }
 
-    private void validateGifCanvasDimensions(ImageReader imageReader) throws IOException, BadImageFormatException {
-        IIOMetadata streamMetadata = imageReader.getStreamMetadata();
-        if (streamMetadata == null) {
-            throw new BadImageFormatException("GIF stream metadata is unavailable.");
+    private FrameData buildGifFrame(GifDecoder gifDecoder, int frameIndex) throws BadImageFormatException {
+        BufferedImage frame = gifDecoder.getFrame(frameIndex);
+        validateGifDimensions(frame, "GIF frame " + frameIndex);
+        return new FrameData(getImageData(frame), gifDecoder.getDelay(frameIndex) / 1000.0);
+    }
+
+    private void validateGifDimensions(BufferedImage frame, String subject) throws BadImageFormatException {
+        if (frame == null) {
+            throw new BadImageFormatException(subject + " is unavailable.");
         }
-
-        IIOMetadataNode root = (IIOMetadataNode) streamMetadata.getAsTree(streamMetadata.getNativeMetadataFormatName());
-        IIOMetadataNode logicalScreenDescriptor = getRequiredChild(root, "LogicalScreenDescriptor");
-
-        int logicalScreenWidth = Integer.parseInt(logicalScreenDescriptor.getAttribute("logicalScreenWidth"));
-        int logicalScreenHeight = Integer.parseInt(logicalScreenDescriptor.getAttribute("logicalScreenHeight"));
-        if (logicalScreenWidth != config.width() || logicalScreenHeight != config.height()) {
+        if (frame.getWidth() != config.width() || frame.getHeight() != config.height()) {
             throw new BadImageFormatException(
-                    "GIF logical screen must be exactly " + config.width() + "x" + config.height() + " pixels.");
+                    subject + " must be exactly " + config.width() + "x" + config.height() + " pixels.");
         }
-    }
-
-    private FrameData buildCompositedGifFrame(
-            ImageReader imageReader,
-            int frameIndex,
-            GifCompositeState compositeState)
-            throws IOException, BadImageFormatException {
-        applyGifDisposal(compositeState);
-
-        BufferedImage frame = imageReader.read(frameIndex);
-        GifFrameMetadata metadata = readGifFrameMetadata(imageReader.getImageMetadata(frameIndex));
-        validateGifFrameBounds(frame, metadata, frameIndex);
-
-        if ("restoreToPrevious".equals(metadata.disposalMethod)) {
-            compositeState.restoreToPreviousSnapshot = copyImage(compositeState.canvas);
-        } else {
-            compositeState.restoreToPreviousSnapshot = null;
-        }
-
-        Graphics2D graphics = compositeState.canvas.createGraphics();
-        try {
-            graphics.setComposite(AlphaComposite.SrcOver);
-            graphics.drawImage(frame, metadata.left, metadata.top, null);
-        } finally {
-            graphics.dispose();
-        }
-
-        compositeState.previousFrameMetadata = metadata;
-        return new FrameData(getImageData(compositeState.canvas), metadata.displayDurationSeconds);
-    }
-
-    private void applyGifDisposal(GifCompositeState compositeState) {
-        if (compositeState.previousFrameMetadata == null) {
-            return;
-        }
-
-        String disposalMethod = compositeState.previousFrameMetadata.disposalMethod;
-        if ("restoreToBackgroundColor".equals(disposalMethod)) {
-            clearRect(
-                    compositeState.canvas,
-                    compositeState.previousFrameMetadata.left,
-                    compositeState.previousFrameMetadata.top,
-                    compositeState.previousFrameMetadata.width,
-                    compositeState.previousFrameMetadata.height);
-        } else if ("restoreToPrevious".equals(disposalMethod) && compositeState.restoreToPreviousSnapshot != null) {
-            Graphics2D graphics = compositeState.canvas.createGraphics();
-            try {
-                graphics.setComposite(AlphaComposite.Src);
-                graphics.drawImage(compositeState.restoreToPreviousSnapshot, 0, 0, null);
-            } finally {
-                graphics.dispose();
-            }
-        }
-    }
-
-    private GifFrameMetadata readGifFrameMetadata(IIOMetadata metadata) throws BadImageFormatException {
-        IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(metadata.getNativeMetadataFormatName());
-        IIOMetadataNode imageDescriptor = getRequiredChild(root, "ImageDescriptor");
-        IIOMetadataNode graphicControlExtension = getRequiredChild(root, "GraphicControlExtension");
-
-        return new GifFrameMetadata(
-                Integer.parseInt(imageDescriptor.getAttribute("imageLeftPosition")),
-                Integer.parseInt(imageDescriptor.getAttribute("imageTopPosition")),
-                Integer.parseInt(imageDescriptor.getAttribute("imageWidth")),
-                Integer.parseInt(imageDescriptor.getAttribute("imageHeight")),
-                graphicControlExtension.getAttribute("disposalMethod"),
-                Integer.parseInt(graphicControlExtension.getAttribute("delayTime")) / 100.0);
-    }
-
-    private void validateGifFrameBounds(BufferedImage frame, GifFrameMetadata metadata, int frameIndex)
-            throws BadImageFormatException {
-        if (frame.getWidth() != metadata.width || frame.getHeight() != metadata.height) {
-            throw new BadImageFormatException(
-                    "GIF frame " + frameIndex + " data size does not match its metadata descriptor.");
-        }
-        if (metadata.left < 0
-                || metadata.top < 0
-                || metadata.left + metadata.width > config.width()
-                || metadata.top + metadata.height > config.height()) {
-            throw new BadImageFormatException(
-                    "GIF frame " + frameIndex + " extends outside the " + config.width() + "x" + config.height()
-                            + " canvas.");
-        }
-    }
-
-    private void clearRect(BufferedImage image, int x, int y, int width, int height) {
-        Graphics2D graphics = image.createGraphics();
-        try {
-            graphics.setComposite(AlphaComposite.Clear);
-            graphics.fillRect(x, y, width, height);
-        } finally {
-            graphics.dispose();
-        }
-    }
-
-    private BufferedImage copyImage(BufferedImage source) {
-        BufferedImage copy = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = copy.createGraphics();
-        try {
-            graphics.setComposite(AlphaComposite.Src);
-            graphics.drawImage(source, 0, 0, null);
-        } finally {
-            graphics.dispose();
-        }
-        return copy;
-    }
-
-    private IIOMetadataNode getRequiredChild(IIOMetadataNode root, String childName) throws BadImageFormatException {
-        for (int i = 0; i < root.getLength(); i++) {
-            if (root.item(i) instanceof IIOMetadataNode child && childName.equals(child.getNodeName())) {
-                return child;
-            }
-        }
-        throw new BadImageFormatException("Missing GIF metadata node: " + childName);
     }
 
     private byte[][][] getImageData(BufferedImage image) {
