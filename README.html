@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WLED Subsystem — Student Guide</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 860px;
+      margin: 2rem auto;
+      padding: 0 1.5rem 4rem;
+      color: #1a1a1a;
+      line-height: 1.7;
+      font-size: 16px;
+    }
+    h1 { border-bottom: 3px solid #0066cc; padding-bottom: .5rem; font-size: 2rem; }
+    h2 { border-bottom: 1px solid #ccc; padding-bottom: .25rem; margin-top: 2.5rem; font-size: 1.4rem; color: #003d7a; }
+    h3 { margin-top: 1.6rem; font-size: 1.1rem; color: #222; }
+    p  { margin: .6rem 0 .9rem; }
+    code {
+      background: #f0f0f0;
+      border: 1px solid #d0d0d0;
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: .9em;
+      font-family: "Consolas", "Menlo", monospace;
+    }
+    pre {
+      background: #f8f8f8;
+      border: 1px solid #d8d8d8;
+      border-radius: 6px;
+      padding: 1rem 1.2rem;
+      overflow-x: auto;
+      line-height: 1.5;
+    }
+    pre code { background: none; border: none; padding: 0; font-size: .88em; }
+    table { border-collapse: collapse; width: 100%; margin: .8rem 0 1rem; }
+    th, td { border: 1px solid #ccc; padding: .55rem .85rem; text-align: left; vertical-align: top; }
+    th { background: #e8eef5; font-weight: 600; }
+    tr:nth-child(even) td { background: #fafafa; }
+    .callout {
+      border-radius: 4px;
+      padding: .75rem 1.1rem;
+      margin: 1.1rem 0;
+    }
+    .callout-warn  { background: #fffbdd; border-left: 4px solid #e6b800; }
+    .callout-tip   { background: #e8f4e8; border-left: 4px solid #2e8b57; }
+    .callout-info  { background: #e8f0fb; border-left: 4px solid #0066cc; }
+    .callout strong { display: block; margin-bottom: .2rem; }
+    .step-list { padding-left: 1.4rem; }
+    .step-list > li { margin-bottom: .7rem; }
+    a { color: #0055aa; }
+    a:hover { color: #003377; }
+    .toc { background: #f8f8f8; border: 1px solid #ddd; border-radius: 6px; padding: .8rem 1.2rem; display: inline-block; min-width: 260px; }
+    .toc ul { margin: 0; padding-left: 1.2rem; }
+    .toc li { margin: .3rem 0; }
+    .diagram {
+      background: #f4f4f4;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: .8rem 1rem;
+      font-family: monospace;
+      font-size: .88em;
+      line-height: 1.4;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    .label { font-size: .85em; color: #555; font-style: italic; }
+  </style>
+</head>
+<body>
+
+<h1>WLED Subsystem</h1>
+
+<p>
+  This subsystem lets your robot control an LED matrix or strip in real time —
+  displaying static images, scrolling banners, sprite animations, or GIFs.
+  It communicates over the robot's Ethernet network, so it works reliably
+  during competition without any Wi-Fi.
+</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#how-it-works">How It Works (Big Picture)</a></li>
+    <li><a href="#hardware">Choosing an LED Controller Board</a></li>
+    <li><a href="#wled-setup">Setting Up the WLED Board</a></li>
+    <li><a href="#gradle">Adding the Library to Your Robot Project</a></li>
+    <li><a href="#api">Using the Subsystem in Java</a></li>
+    <li><a href="#images">Creating Your Image Files</a></li>
+    <li><a href="#examples">Full Examples</a></li>
+    <li><a href="#yearly">Updating for a New Season</a></li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="how-it-works">How It Works (Big Picture)</h2>
+
+<p>Here is the flow from robot code to glowing LEDs:</p>
+
+<div class="diagram">  Your Robot Code
+       │
+       │  calls  wled.showBitmap("/home/lvuser/deploy/leds/auto.png")
+       │
+       ▼
+  WLEDSubsystem
+    • reads the image file from the RoboRIO's disk
+    • converts each pixel to RGBW color data
+    • 50 times per second, sends UDP packets to the LED controller
+       │
+       │  UDP packets over Ethernet  (DDP protocol, port 4048)
+       │
+       ▼
+  QuinLED-Dig-Octa board  (running WLED firmware)
+    • receives the pixel data packets
+    • drives the physical LED strip/matrix
+       │
+       ▼
+  Your LEDs light up!</div>
+
+<p>
+  <strong>UDP packets</strong> are short network messages — think of them
+  like postcards.  The robot sends roughly 50 per second to keep the LEDs
+  updating smoothly.  The <strong>DDP protocol</strong> is just a simple
+  agreed-upon format for those postcards: "here are the colors for LEDs
+  0 through 31, etc."
+</p>
+
+<p>
+  <strong>WLED</strong> is free, open-source firmware that runs on a wide
+  variety of ESP32-based boards.  It handles receiving the DDP packets and
+  physically driving the LEDs.  You configure it once through a web browser,
+  and then your robot code takes over at match time.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="hardware">Choosing an LED Controller Board</h2>
+
+<p>
+  This subsystem works with <strong>any board running WLED firmware that is
+  reachable over the network</strong>.  The only hard requirement for an FRC
+  robot is <strong>wired Ethernet</strong> — Wi-Fi-only boards are not
+  reliable enough inside the metal environment of a competition field.
+</p>
+<p>
+  Many WLED-compatible boards exist.  The table below lists some good options.
+  For an FRC robot you typically only need <strong>one or two LED output
+  channels</strong> (one matrix or strip), so there is no need to reach for
+  an 8-channel board unless your design genuinely calls for it.
+</p>
+
+<h3>Board options</h3>
+<table>
+  <tr><th>Board</th><th>Channels</th><th>Ethernet</th><th>Notes</th></tr>
+  <tr>
+    <td><a href="https://quinled.info/quinled-dig-uno/" target="_blank">QuinLED-Dig-Uno</a></td>
+    <td>2</td>
+    <td>Yes (requires the -ABE "Antenna Board + Ethernet" variant)</td>
+    <td>Compact, well-documented, good starting point for a single matrix.</td>
+  </tr>
+  <tr>
+    <td><a href="https://quinled.info/quinled-dig-quad/" target="_blank">QuinLED-Dig-Quad</a></td>
+    <td>4</td>
+    <td>Yes (requires the -ABE variant)</td>
+    <td>Middle ground — room to grow if you add more strips later.</td>
+  </tr>
+  <tr>
+    <td><a href="https://quinled.info/quinled-dig-octa/" target="_blank">QuinLED-Dig-Octa</a></td>
+    <td>8</td>
+    <td>Yes (built-in on the Brainboard-32-8L)</td>
+    <td>Powerful, but overkill for most FRC robots.  Heavier and more
+        expensive than necessary if you only need one or two strips.</td>
+  </tr>
+  <tr>
+    <td><a href="https://www.tindie.com/products/k7bbr/wasatch-pixels-quad-ethernet-controller-with-wled/" target="_blank">Wasatch Pixels Quad</a></td>
+    <td>4</td>
+    <td>Yes (built-in)</td>
+    <td>Pre-assembled with level-shifting; available in 5 V and 12 V
+        versions.  Sold on Tindie.</td>
+  </tr>
+  <tr>
+    <td><a href="https://www.tindie.com/products/k7bbr/wasatch-duo-controller-wwled-and-ethernet/" target="_blank">Wasatch Pixels Duo</a></td>
+    <td>2</td>
+    <td>Yes (built-in)</td>
+    <td>Smallest Wasatch option; good fit for a single matrix.</td>
+  </tr>
+  <tr>
+    <td><a href="https://www.athom.tech/blank-1/ethernet-wled-esp32-address-and-pwm-strip-controller" target="_blank">AthomTech Ethernet WLED controller</a></td>
+    <td>2–4</td>
+    <td>Yes (built-in)</td>
+    <td>Includes a logic-level shifter and optional microphone; compact form
+        factor.</td>
+  </tr>
+</table>
+
+<p>
+  A full list of WLED-compatible hardware (including community-designed boards)
+  is maintained at
+  <a href="https://kno.wled.ge/features/ethernet-lan/" target="_blank">kno.wled.ge/features/ethernet-lan/</a>
+  and the
+  <a href="https://github.com/wled/WLED/wiki/Compatible-hardware" target="_blank">WLED compatible hardware wiki</a>.
+</p>
+
+<div class="callout callout-info">
+  <strong>Make sure you get the Ethernet variant</strong>
+  Several QuinLED boards are sold in both a Wi-Fi-only version and an
+  Ethernet version (the "<strong>-ABE</strong>" variant, which stands for
+  Antenna Board + Ethernet).  Double-check the product page before ordering —
+  the Wi-Fi-only version looks almost identical but will not work reliably
+  on a robot.
+</div>
+
+<h3 id="power">How we power the LEDs</h3>
+<p>
+  We power the LED strips from an <strong>external USB-C PD battery pack</strong>
+  rather than from the robot's main 12 V battery.  This keeps LED current off
+  the robot's power bus entirely, which avoids any risk of browning out the
+  RoboRIO or other electronics if the LEDs draw a large spike.
+</p>
+<p>The chain looks like this:</p>
+<div class="diagram">  USB-C PD battery pack  (must support 12 V PD output)
+         │
+         ▼
+  USB-C PD to bare-wire pigtail cable  ← negotiates 12 V from the battery
+         │
+         ▼
+  Buck converter (12 V → 5 V)          ← steps voltage down for the LED strip
+         │
+         ▼
+  LED strip power input (5 V)</div>
+
+<p>
+  Instead of using a separate trigger board, we recommend using a
+  <strong>USB-C PD to bare-wire pigtail cable</strong> that negotiates 12 V
+  directly from the battery pack and exposes the output as two open wires.
+  A cable like
+  <strong>MECCANIXITY USB C Male Plug Bare Wire Pigtail Cable, 22AWG, 12 V 3 A,
+  Type C Plug to 2 Pin Bare Wire Open End Connector</strong>
+  keeps the power path fully COTS and avoids soldering a separate trigger module.
+  In our setup, the cable's bare wires land directly in the buck converter's
+  screw-terminal input, so the upstream path stays as an unmodified COTS cable
+  feeding an unmodified COTS board.
+</p>
+<p>
+  The <strong>buck converter</strong> steps the 12 V down to a stable 5 V for
+  the LED strip.  We use a converter like the
+  <a href="https://www.amazon.com/dp/B09VY3WQ93" target="_blank">2-pack 12 V/24 V to 5 V 10 A step-down converter</a>
+  — wire its input to the pigtail cable's 12 V output and its output to the
+  LED strip's power input.  The example pigtail cable above is rated for
+  3 A at 12 V (about 36 W), so make sure your total LED load stays within that
+  upstream power budget even if your buck converter is rated for more.  The
+  controller board itself draws very little current and is powered separately
+  through its own supply input.
+</p>
+
+<div class="callout callout-info">
+  <strong>Alternative: direct 5 V power path</strong>
+  If your LED load is small enough, a direct <strong>5 V COTS cable</strong>
+  from the battery pack to the WLED hardware may be a cleaner option than a
+  12 V cable plus a buck converter.  That removes the intermediate converter
+  from the external-battery power path, which may make the setup simpler to
+  explain at inspection.  The tradeoff is available power: for example, a
+  5 V / 3 A cable only gives you about 15 W upstream.
+</div>
+
+<div class="callout callout-tip">
+  <strong>Why a separate battery instead of the robot's PDP/PDH?</strong>
+  Our team powers the WLED hardware from a separate USB-C PD battery pack to
+  keep LED current off the robot's main power bus.  That reduces the chance
+  that decorative lighting will affect robot performance, and it also means
+  the LEDs can stay on during a brownout.  This setup has passed inspection
+  for us at 2026 events, but teams should confirm that their own wiring and
+  usage comply with the current FRC manual and local inspection guidance.
+</div>
+
+<div class="callout callout-warn">
+  <strong>⚠ Check USB-C PD compatibility</strong>
+  Not all battery packs support 12 V PD output.  Before buying, confirm that
+  the battery explicitly lists 12 V as a supported PD output voltage in its
+  spec sheet.  Basic phone charger banks typically only go up to 9 V or 5 V
+  and will not work.
+</div>
+
+<h3>General WLED documentation</h3>
+<table>
+  <tr><th>What you need</th><th>Where to find it</th></tr>
+  <tr>
+    <td>WLED main documentation site</td>
+    <td><a href="https://kno.wled.ge/" target="_blank">kno.wled.ge</a></td>
+  </tr>
+  <tr>
+    <td>Ethernet-capable boards and setup</td>
+    <td><a href="https://kno.wled.ge/features/ethernet-lan/" target="_blank">kno.wled.ge/features/ethernet-lan/</a></td>
+  </tr>
+  <tr>
+    <td>DDP protocol reference</td>
+    <td><a href="https://kno.wled.ge/interfaces/ddp/" target="_blank">kno.wled.ge/interfaces/ddp/</a></td>
+  </tr>
+  <tr>
+    <td>Compatible hardware list (community-maintained)</td>
+    <td><a href="https://github.com/wled/WLED/wiki/Compatible-hardware" target="_blank">github.com/wled/WLED/wiki/Compatible-hardware</a></td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="wled-setup">Setting Up the WLED Board</h2>
+
+<p>
+  You only need to do this setup once per board (or when setting up a new
+  robot).  You configure WLED through its built-in web interface — open a
+  browser and navigate to the board's IP address.
+</p>
+
+<h3>Step 1 — Get WLED running</h3>
+<p>
+  Follow the getting-started guide for whichever board you chose.  Most
+  pre-assembled boards (QuinLED, Wasatch, AthomTech) come with WLED
+  pre-installed; check your board's product page to confirm.  If your board
+  needs firmware flashed, WLED's own flashing instructions are at
+  <a href="https://kno.wled.ge/basics/install-binary/" target="_blank">kno.wled.ge/basics/install-binary/</a>.
+</p>
+
+<h3>Step 2 — Assign a static IP address</h3>
+<p>
+  Your robot code needs to know where to send the LED data, so the board
+  needs a fixed (static) IP address that never changes.  A good convention
+  for FRC is to use your team number in the address:
+</p>
+<pre><code>10.TE.AM.11</code></pre>
+<p>
+  For example, team 9999 would use <code>10.99.99.11</code>.  In the WLED
+  web UI go to <strong>Config → Network</strong> (for Ethernet) and set the
+  static IP there.  Write the address down — you will put it into your robot
+  code as <code>controllerAddress</code>.
+</p>
+
+<h3>Step 3 — Enable the DDP receiver</h3>
+<p>
+  DDP is the protocol this subsystem uses to send pixel data to WLED.
+  It is turned off by default, so you need to switch it on.
+</p>
+<ol class="step-list">
+  <li>Open the WLED web UI in a browser.</li>
+  <li>Go to <strong>Config → Sync Interfaces</strong>.</li>
+  <li>Find the <strong>DDP</strong> section and enable the DDP receiver.</li>
+  <li>Leave the port at the default (<strong>4048</strong>) unless you have a
+      reason to change it.  The subsystem defaults to 4048 as well.</li>
+</ol>
+<p>
+  More detail on DDP:
+  <a href="https://kno.wled.ge/interfaces/ddp/" target="_blank">kno.wled.ge/interfaces/ddp/</a>
+</p>
+
+<h3>Step 4 — Configure your LED layout</h3>
+<p>
+  In <strong>Config → LED Preferences</strong>, tell WLED how many LEDs are
+  connected and how they are wired.  The total number of LEDs must equal
+  <code>width × height</code> (the same values you will put in
+  <code>WLEDConfig</code> in Java).
+</p>
+<p>
+  The subsystem sends pixels starting from LED index 0 and moving row by row
+  left to right, so the physical wiring of your strip must follow that same
+  order.
+</p>
+
+<div class="callout callout-tip">
+  <strong>Tip — brightness limiting</strong>
+  WLED has a current-limit setting under
+  <strong>Config → LED Preferences → Maximum Current</strong> that can
+  silently cap the brightness of your LEDs.  If your LEDs look dimmer than
+  expected even when showing white, raise this limit (or remove it if your
+  power supply is properly sized and fused).
+</div>
+
+<!-- ============================================================ -->
+<h2 id="gradle">Adding the Library to Your Robot Project</h2>
+
+<p>
+  The WLED library lives in its own folder alongside the Robot project.  To
+  use it, you tell Gradle (the build system) where to find it and how to
+  link it.  This is called a <em>composite build</em> — Gradle compiles the
+  library from source at the same time as your robot code, so you never have
+  to manually publish or copy JAR files.
+</p>
+
+<h3>Expected folder layout</h3>
+<div class="diagram">YourRepo/
+├── Robot/              ← your WPILib robot project
+└── Subsystems/
+    └── WLED/           ← this library</div>
+<p>
+  If your folder names or relative paths are different, adjust the paths in
+  the steps below accordingly.
+</p>
+
+<h3>Step 1 — Edit <code>settings.gradle</code> in the Robot project</h3>
+<p>
+  Open <code>Robot/settings.gradle</code> and add the following block
+  anywhere <em>after</em> the <code>pluginManagement { ... }</code> section:
+</p>
+<pre><code>includeBuild("../Subsystems/WLED") {
+    dependencySubstitution {
+        substitute(module("frc.kauaibots.subsystems:wled")).using(project(":"))
+    }
+}</code></pre>
+<p>
+  This tells Gradle: "when anyone asks for the library named
+  <code>frc.kauaibots.subsystems:wled</code>, use the local source code
+  at <code>../Subsystems/WLED</code> instead of looking it up online."
+</p>
+
+<h3>Step 2 — Add the dependency in <code>build.gradle</code></h3>
+<p>
+  Open <code>Robot/build.gradle</code> and find the <code>dependencies { }</code>
+  block.  Add this line inside it:
+</p>
+<pre><code>implementation 'frc.kauaibots.subsystems:wled'</code></pre>
+
+<h3>Step 3 — Make the JAR task depend on the WLED JAR</h3>
+<p>
+  Still in <code>Robot/build.gradle</code>, find the <code>jar { }</code>
+  block and add this line inside it:
+</p>
+<pre><code>dependsOn gradle.includedBuild("WLED").task(":jar")</code></pre>
+<p>
+  This ensures the WLED library is compiled and bundled into your robot's
+  JAR file before it gets deployed to the RoboRIO.
+</p>
+
+<h3>What the relevant parts of your files should look like</h3>
+<p><strong>settings.gradle</strong> (relevant addition shown):</p>
+<pre><code>// ... the pluginManagement block is above this ...
+
+includeBuild("../Subsystems/WLED") {
+    dependencySubstitution {
+        substitute(module("frc.kauaibots.subsystems:wled")).using(project(":"))
+    }
+}</code></pre>
+
+<p><strong>build.gradle</strong> (relevant additions shown with comments):</p>
+<pre><code>dependencies {
+    implementation wpi.java.deps.wpilib()
+    implementation wpi.java.vendor.java()
+    implementation 'frc.kauaibots.subsystems:wled'    // ← ADD THIS LINE
+    // ... your other dependencies ...
+}
+
+jar {
+    dependsOn gradle.includedBuild("WLED").task(":jar")   // ← ADD THIS LINE
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    // ... rest of the jar block ...
+}</code></pre>
+
+<div class="callout callout-tip">
+  <strong>How to verify it worked</strong>
+  After saving both files, open a terminal in the Robot project folder and run
+  <code>./gradlew compileJava</code>.  If the build succeeds without errors,
+  Gradle found and compiled the WLED library correctly.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="api">Using the Subsystem in Java</h2>
+
+<h3>Step 1 — Create a WLEDConfig</h3>
+<p>
+  <code>WLEDConfig</code> is a simple data object that tells the subsystem
+  where your LED controller is and how big your LED matrix is.
+</p>
+<pre><code>import frc.kauaibots.subsystems.wled.WLEDConfig;
+
+WLEDConfig config = new WLEDConfig(
+    "10.99.99.11",  // IP address you assigned to the QuinLED board
+    4048,           // DDP port — leave at 4048 unless you changed it in WLED
+    32,             // width of your LED matrix in pixels (number of columns)
+    16,             // height of your LED matrix in pixels (number of rows)
+    8               // rowsPerPacket — leave at 8 unless you have a reason to change it
+);</code></pre>
+
+<table>
+  <tr><th>Parameter</th><th>What it means</th></tr>
+  <tr>
+    <td><code>controllerAddress</code></td>
+    <td>The static IP address you assigned to the QuinLED board in Step 2
+        of the WLED setup.</td>
+  </tr>
+  <tr>
+    <td><code>ddpPort</code></td>
+    <td>The UDP port for DDP communication.  The WLED default (and the
+        subsystem default) is <code>4048</code>.  Only change this if you
+        specifically changed it in WLED.</td>
+  </tr>
+  <tr>
+    <td><code>width</code></td>
+    <td>How many LEDs wide your matrix is (the number of columns).</td>
+  </tr>
+  <tr>
+    <td><code>height</code></td>
+    <td>How many LEDs tall your matrix is (the number of rows).  For a
+        single strip treated as one row, use <code>1</code>.</td>
+  </tr>
+  <tr>
+    <td><code>rowsPerPacket</code></td>
+    <td>How many rows of LEDs are packed into each network packet.  A value
+        of <code>8</code> is a safe starting point for most setups.</td>
+  </tr>
+</table>
+
+<h3>Step 2 — Create a WLEDSubsystem</h3>
+<pre><code>import frc.kauaibots.subsystems.wled.WLEDSubsystem;
+
+WLEDSubsystem wled = new WLEDSubsystem(config);</code></pre>
+<p>
+  Create this in <code>RobotContainer</code> like any other subsystem.
+  The subsystem opens a network connection immediately when it is created,
+  so only create one instance.
+</p>
+
+<h3>Step 3 — Call a command method to show something</h3>
+<p>
+  The subsystem has four methods, each returning a
+  <code>Command</code> that you can schedule or bind to a trigger like
+  any other WPILib command.  All four work during disabled mode
+  (before and after a match), so your LEDs will show even in the pits.
+</p>
+
+<table>
+  <tr><th>Method</th><th>What it does</th><th>Image requirements</th></tr>
+  <tr>
+    <td><code>showBitmap(path)</code></td>
+    <td>Displays a single still image on the matrix.</td>
+    <td>PNG, JPG, or BMP.  Width and height must each be at least as large
+        as your matrix dimensions.  Extra pixels on the right/bottom are
+        ignored.</td>
+  </tr>
+  <tr>
+    <td><code>showBitmapAsMarquee(path)</code></td>
+    <td>Scrolls an image horizontally, one pixel per frame, wrapping around
+        continuously.  Great for scrolling text banners.</td>
+    <td>Same formats.  Height ≥ matrix height.  Make the image wider than
+        your matrix to get a longer scroll before it repeats.</td>
+  </tr>
+  <tr>
+    <td><code>showFromBitmapAnimationStrip(path)</code></td>
+    <td>Treats one wide image as a row of animation frames side by side,
+        and plays them in sequence (like a film strip).</td>
+    <td>Same formats.  Width must be an <em>exact multiple</em> of your
+        matrix width.  Each frame is one matrix-width slice of the image.</td>
+  </tr>
+  <tr>
+    <td><code>showGif(path)</code></td>
+    <td>Plays an animated GIF at the speed embedded in the file, looping
+        forever.</td>
+    <td>Animated GIF.  Every frame must be <em>exactly</em> your matrix
+        width × height — no auto-scaling.</td>
+  </tr>
+</table>
+
+<div class="callout callout-info">
+  <strong>Where do image files live?</strong>
+  Put image files in the <code>src/main/deploy/</code> folder inside the
+  Robot project.  GradleRIO automatically copies everything in that folder
+  to <code>/home/lvuser/deploy/</code> on the RoboRIO when you deploy.
+  <br><br>
+  So a file you save at <code>src/main/deploy/leds/auto.png</code> will be
+  available on the robot as <code>"/home/lvuser/deploy/leds/auto.png"</code>
+  — that is the path string you pass to the command methods.
+</div>
+
+<div class="callout callout-tip">
+  <strong>Load commands early, not mid-match</strong>
+  When you call <code>showBitmap(...)</code> the subsystem reads the image
+  file from disk right then.  Call all of your <code>show*()</code> methods
+  during <code>RobotContainer</code> construction (before the match starts)
+  and store the returned <code>Command</code> objects as fields.  This way
+  the disk reads happen at startup, not during autonomous or teleop.
+</div>
+
+<h3>RGBW color notes</h3>
+<p>
+  The subsystem sends color data in <strong>RGBW</strong> format (four channels
+  per LED: Red, Green, Blue, White).  It automatically converts regular
+  RGB colors from your images into RGBW by pulling out the neutral "white"
+  component from each pixel.  You do not need to do anything special —
+  just use normal color images.
+</p>
+<p>
+  If your LED strip is RGB-only (not RGBW), WLED will still accept the data;
+  it blends or ignores the White channel depending on your strip type setting
+  in WLED.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="images">Creating Your Image Files</h2>
+
+<p>
+  Here is a visual guide to what each animation mode expects.  These examples
+  assume a 32×16 LED matrix.
+</p>
+
+<h3>showBitmap — single still image</h3>
+<div class="diagram">  Image file (must be at least 32 wide × 16 tall):
+  ┌────────────────────────────────┐
+  │                                │  ← 32 pixels wide, 16 pixels tall
+  │        your artwork here       │    (exactly or larger)
+  │                                │
+  └────────────────────────────────┘
+  The top-left 32×16 region is shown. Extra pixels on the right or bottom
+  are ignored.</div>
+
+<h3>showBitmapAsMarquee — scrolling banner</h3>
+<div class="diagram">  Image file (width can be anything, height ≥ 16):
+  ┌─────────────────────────────────────────────────────────────┐
+  │  GO TEAM!   GO TEAM!   GO TEAM!                             │
+  └─────────────────────────────────────────────────────────────┘
+        ↑ wide image scrolls left, one pixel per frame (50 fps)
+        ↑ wraps around — the right edge connects back to the left edge</div>
+
+<h3>showFromBitmapAnimationStrip — frame-by-frame animation</h3>
+<div class="diagram">  Image file (width = 32 × number of frames, height ≥ 16):
+  ┌────────────────┬────────────────┬────────────────┬────────────────┐
+  │    frame 1     │    frame 2     │    frame 3     │    frame 4     │
+  │   (32 wide)    │   (32 wide)    │   (32 wide)    │   (32 wide)    │
+  └────────────────┴────────────────┴────────────────┴────────────────┘
+  ↑ total width = 128 pixels (4 frames × 32)
+  Frames play left to right at 50 fps (20 ms each), then loop.</div>
+
+<h3>showGif — animated GIF</h3>
+<div class="diagram">  Animated GIF (must be exactly 32 wide × 16 tall):
+  ┌────────────────────────────────┐
+  │        frame 1 of N            │  ← each frame plays for the duration
+  └────────────────────────────────┘    set in the GIF file
+  ← frames loop back to the start automatically</div>
+
+<div class="callout callout-warn">
+  <strong>⚠ Image errors are silent</strong>
+  If an image file is the wrong size, missing, or in an unsupported format,
+  the subsystem will log an error to the Driver Station but the LEDs will
+  just stay at whatever they were showing.  Always check the Driver Station
+  log after deploy if your LEDs are not doing what you expect.
+</div>
+
+<h3>Quick reference: image size rules</h3>
+<table>
+  <tr><th>Method</th><th>Width</th><th>Height</th><th>File type</th></tr>
+  <tr>
+    <td><code>showBitmap</code></td>
+    <td>≥ matrix width</td>
+    <td>≥ matrix height</td>
+    <td>PNG, JPG, BMP</td>
+  </tr>
+  <tr>
+    <td><code>showBitmapAsMarquee</code></td>
+    <td>any (wider = longer scroll)</td>
+    <td>≥ matrix height</td>
+    <td>PNG, JPG, BMP</td>
+  </tr>
+  <tr>
+    <td><code>showFromBitmapAnimationStrip</code></td>
+    <td>exact multiple of matrix width</td>
+    <td>≥ matrix height</td>
+    <td>PNG, JPG, BMP</td>
+  </tr>
+  <tr>
+    <td><code>showGif</code></td>
+    <td>exactly matrix width</td>
+    <td>exactly matrix height</td>
+    <td>Animated GIF</td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="examples">Full Examples</h2>
+
+<h3>Basic setup in RobotContainer</h3>
+<pre><code>import frc.kauaibots.subsystems.wled.WLEDConfig;
+import frc.kauaibots.subsystems.wled.WLEDSubsystem;
+import edu.wpi.first.wpilibj2.command.Command;
+
+public class RobotContainer {
+
+    // --- WLED configuration ---
+    // Change the IP address to match whatever you assigned to your board.
+    // Change width/height to match the size of your actual LED matrix.
+    private static final WLEDConfig WLED_CONFIG = new WLEDConfig(
+        "10.99.99.11",  // IP address of QuinLED-Dig-Octa
+        4048,           // DDP port (leave at 4048 unless you changed it in WLED)
+        32,             // LED matrix width in pixels
+        16,             // LED matrix height in pixels
+        8               // rows per packet (8 is a safe default)
+    );
+
+    // Create the subsystem — only do this once!
+    private final WLEDSubsystem wled = new WLEDSubsystem(WLED_CONFIG);
+
+    // Load all animations at startup (reading files now avoids delays mid-match)
+    private final Command ledsAuto     = wled.showBitmap(
+                                             "/home/lvuser/deploy/leds/auto.png");
+    private final Command ledsTeleop   = wled.showGif(
+                                             "/home/lvuser/deploy/leds/teleop.gif");
+    private final Command ledsDisabled = wled.showBitmapAsMarquee(
+                                             "/home/lvuser/deploy/leds/banner.png");
+
+    public RobotContainer() {
+        configureBindings();
+
+        // Play the scrolling banner animation whenever the robot is disabled
+        // (e.g. sitting in the pits, waiting to start).
+        wled.setDefaultCommand(ledsDisabled);
+    }
+
+    private void configureBindings() {
+        // ... your button bindings ...
+    }
+}</code></pre>
+
+<h3>Switching LEDs based on robot state</h3>
+<pre><code>// In configureBindings() or wherever you set up triggers:
+
+// Light up "ready to shoot" LEDs when the shooter is at speed.
+new Trigger(shooter::isAtSpeed)
+    .onTrue(wled.showBitmap("/home/lvuser/deploy/leds/shooter_ready.png"))
+    .onFalse(ledsTeleop);   // go back to the normal teleop animation
+
+// Play a celebration animation when a button is held.
+operatorController.a()
+    .whileTrue(wled.showGif("/home/lvuser/deploy/leds/celebration.gif"))
+    .onFalse(ledsTeleop);</code></pre>
+
+<h3>Matching LEDs to robot mode using AutonomousInit / TeleopInit</h3>
+<pre><code>// In Robot.java:
+
+@Override
+public void autonomousInit() {
+    // ledsAuto is a stored Command field in RobotContainer
+    robotContainer.getLedsAuto().schedule();
+}
+
+@Override
+public void teleopInit() {
+    robotContainer.getLedsTeleop().schedule();
+}</code></pre>
+
+<h3>Recommended deploy folder layout</h3>
+<pre><code>Robot/
+└── src/
+    └── main/
+        └── deploy/
+            └── leds/
+                ├── auto.png              ← 32×16, shown during autonomous
+                ├── teleop.gif            ← 32×16 animated GIF for teleop
+                ├── shooter_ready.png     ← 32×16, shown when shooter is at speed
+                ├── banner.png            ← wide image (e.g. 256×16) for marquee
+                └── celebration.gif       ← 32×16 animated GIF</code></pre>
+
+<p class="label">
+  These files are automatically copied to <code>/home/lvuser/deploy/leds/</code>
+  on the RoboRIO every time you deploy.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="yearly">Updating for a New Season</h2>
+
+<p>
+  This library is designed to be reused from year to year.  Each season gets
+  its own branch (e.g. <code>2026</code>, <code>2027</code>) because the
+  library depends on WPILib, which releases a new version each season.
+</p>
+
+<p>
+  The detailed update procedure is in the file
+  <code>HOW_TO_UPDATE_FOR_THE_CURRENT_YEAR.TXT</code>
+  in the <code>src/main/java/frc/kauaibots/subsystems/wled/</code> folder.
+  The short version:
+</p>
+
+<ol class="step-list">
+  <li>Create a new branch for the new season (e.g. branch <code>2027</code>
+      from <code>2026</code>).</li>
+  <li>Install the new year's WPILib.</li>
+  <li>Use the WPILib VS Code importer on this project to get updated Gradle
+      files, then copy them back into the branch.</li>
+  <li>Update the WPILib version numbers in <code>build.gradle</code> and
+      <code>settings.gradle</code>.</li>
+  <li>Run <code>./gradlew test</code> from inside the WLED folder to make
+      sure the regression tests pass.</li>
+  <li>Update the Robot project for the same season and verify it still
+      compiles with the updated WLED library.</li>
+</ol>
+
+</body>
+</html>
